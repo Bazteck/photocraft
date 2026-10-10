@@ -22,7 +22,7 @@ readiness; treat it as an upper bound.
 | M7 Adjust + filters | 🟡 | 16 adjustment layers + destructive-only adjustments, 70+ filters incl. Blur Gallery, Actions record/replay, Fade |
 | M8 PSD v2 | 🟡 | adjustments (incl. Selective Color, Color Lookup), fills, effects, patterns, text, shapes, smart objects, alpha channels; oracle 111/170 |
 | M9 Text, vector, styles | 🟡 | type engine + Warp Text, shapes / pen / paths, all 10 effects on CPU and GPU (parity ≤1/255, 30/31 corpus effect files on the GPU) |
-| M10 Smart features | 🟡 | classical Select Subject / Object, content-aware fill and scale, healing, auto-align / auto-blend; ML backend not started |
+| M10 Smart features | 🟡 | classical Select Subject / Object, content-aware fill and scale, healing, auto-align / auto-blend; ML backend started (`photocraft-ml`, tract: Select Subject high quality with BiRefNet-lite) |
 | M11 Automation + formats | 🟡 | MCP (headless + live bridge), batch, Image Processor, prefs over MCP; DoD test passes (10 agent tasks over MCP, `automation/tests/agent_tasks.rs`); since 2026-10-07 the CLI rejects unknown flags and answers `<subcommand> --help`, batch runs report same-name outputs instead of overwriting them, MCP `command_batch` steps can start background jobs, and headless saves never flatten over the opened file; JP2 / DICOM / DPX / C2PA pending |
 | M12 Pro parity | 🟡 | CMYK / Lab / Indexed / Bitmap / Duotone, ICC + soft proofing, channels + Quick Mask, smart-object stack modes, artboards, layer comps; print, HDR, photomerge, timeline pending |
 
@@ -76,6 +76,23 @@ These are local measurements at amount 1; see [method and limits](radial-blur-pe
 The transform also corrects f32 envelope errors past coordinate 4096, including nonzero
 distances at selected pixels. The parallel path needs an additional four bytes per pixel;
 see [measurements, correctness and limits](selection-distance-performance.md).
+
+2026-10-10: Magic Wand now compares source-precision RGBA values instead of first rounding
+16/32-bit samples to 8-bit. Select Subject runs its detected boundary through the existing
+image-guided matte refiner, with the synthetic subject IoU gate retained at 8/16/32-bit.
+These improve colour discrimination and edge coverage; Select Subject remains a classical
+saliency/GrabCut heuristic, not Photoshop's learned semantic model.
+
+2026-10-10 (later): the ML backend has started. `photocraft-ml` (L4, behind the engine's and apps'
+optional `ml` feature) runs BiRefNet-lite (MIT; 224 MB fp32 ONNX, never committed, installed in
+`models/` next to the executable) with tract, pure Rust. `select.subject {"quality":"high"}` runs
+it as a background job: on a 3120×4160 phone photo (Windows laptop, 16 threads) about 40 s
+including the first model load, and the selection matches Photoshop's Select Subject by eye
+(person with shoes and glasses, gaps between arms and torso, a bag beside them left out). The
+fast classical mode stays the default. Also: Magic Wand Sample Size; Select Subject ignores flat
+margins round a placed photo, and no longer forces a subject cut off by the frame to background.
+Open: speed (ONNX Runtime measured 13–19 s on the same CPU, DirectML ran out of GPU memory), the
+DIS5K training-data licence question (ATTRIBUTION.md), MSI/CI packaging of the model untested.
 
 **Bottom line.** Two days after 0.2.0 we had merged ~96 PRs and closed ~48 issues, but **real
 Photoshop parity is still well below 50%**. The biggest gaps are AI, missing tools, professional
