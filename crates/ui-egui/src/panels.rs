@@ -1039,6 +1039,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     Tool::MagicWand => {
                         selection_mode_buttons(app, ui);
                         widgets::vline(ui, 22.0);
+                        // Shared with the Eyedropper, as in Photoshop.
+                        opt_label(ui, tl!("Sample Size:"));
+                        widgets::dropdown(ui, "wand-sample-size", &mut app.ui.tool_options.eyedropper_size, &crate::eyedropper_ui::size_options(), 130.0);
                         opt_label(ui, tl!("Tolerance"));
                         widgets::value_field(ui, &mut app.ui.tool_options.tolerance, 0.0..=255.0, "", 58.0);
                         widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
