@@ -156,23 +156,21 @@ fn dragging_on_the_first_anchor_closes_with_its_handles_in_one_step() {
 fn shift_constrains_anchors_and_handles_through_the_canvas() {
     let mut h = harness();
     click(&mut h, [20.0, 20.0]);
-    // ⇧-click at ~6° from the first anchor: the anchor lands on the horizontal.
-    let p = screen(&h, [100.0, 28.0]);
+    // ⇧-drag from ~6° off the horizontal through the first anchor, out to ~43°.
+    let (from, to) = ([100.0, 28.0], [140.0, 65.0]);
     mods(&mut h, Modifiers::SHIFT);
+    let p = screen(&h, from);
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
     button(&mut h, p, true, Modifiers::SHIFT);
-    // Keep dragging with ⇧ held: the handle snaps to 45° around the new anchor.
-    let a = h.state().ui.pen.clone().unwrap().knots[1][0];
-    assert!((a[1] - 20.0).abs() < 0.05, "anchor constrained to the horizontal: {a:?}");
-    for q in [[a[0] + 20.0, a[1] + 18.0], [a[0] + 40.0, a[1] + 37.0]] {
-        h.event(egui::Event::PointerMoved(screen(&h, [q[0] as f32, q[1] as f32])));
-        h.run_steps(1);
-    }
-    let k = h.state().ui.pen.clone().unwrap().knots[1];
+    move_to(&mut h, from, to);
+    let up = screen(&h, to);
+    button(&mut h, up, false, Modifiers::SHIFT);
+    mods(&mut h, Modifiers::NONE);
+    let pen = h.state().ui.pen.clone().unwrap();
+    assert_eq!(pen.knots.len(), 2);
+    let k = pen.knots[1];
+    assert!((k[0][1] - 20.0).abs() < 0.05, "anchor constrained to the horizontal: {k:?}");
     let (dx, dy) = (k[2][0] - k[0][0], k[2][1] - k[0][1]);
     assert!((dx - dy).abs() < 0.05 && dx > 0.0, "out handle on the 45° diagonal: {k:?}");
-    button(&mut h, screen(&h, [(a[0] + 40.0) as f32, (a[1] + 37.0) as f32]), false, Modifiers::SHIFT);
-    mods(&mut h, Modifiers::NONE);
-    assert_eq!(h.state().ui.pen.as_ref().unwrap().knots.len(), 2);
 }
