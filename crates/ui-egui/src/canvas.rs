@@ -864,6 +864,15 @@ impl ViewXform {
         vec2((d.x * c + d.y * s) / self.sx(), -d.x * s + d.y * c)
     }
 
+    /// A document-space vector on screen: stretched, rotated, flipped and zoomed as the view
+    /// draws it (the inverse of [`Self::unmap_vec`], with the zoom).
+    pub fn map_vec(self, d: Vec2) -> Vec2 {
+        let (c, s) = self.sincos();
+        let dx = d.x * self.sx();
+        let v = vec2(dx * c - d.y * s, dx * s + d.y * c) * self.zoom;
+        if self.flip { vec2(-v.x, v.y) } else { v }
+    }
+
     pub fn to_screen(&self, x: f32, y: f32) -> Pos2 {
         let (c, s) = self.sincos();
         let dx = (x - self.center[0]) * self.sx();
@@ -2894,6 +2903,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
     let under_dialog = !app.ui.dialogs.is_empty();
     let free_hover = under_dialog && crate::dialogs::free_pointer_over(&ctx, rect).is_some();
+    // A press on the canvas while a tool letter is held makes that tool temporary (#2672).
+    if !under_dialog && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
+        crate::spring_tools::note_canvas_press(app);
+    }
     // Navigation (wheel_nav.rs): scroll pans (⇧ or ⌘/Ctrl sideways); pinch and ⌥-scroll zoom around the pointer.
     let wheel =
         crate::wheel_nav::read(&ctx, app.session.prefs().general.zoom_with_scroll_wheel, app.session.prefs().enhanced_controls.zoom_with_trackpad_pinch);
@@ -3575,10 +3588,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                                 egui::CursorIcon::None
                             }
                             // A shaped tip (sampled bitmap, or a rotated/flattened round tip)
-                            // traces its outline; a plain round tip keeps the circle.
+                            // traces its outline, turned and flipped with the view; a plain round
+                            // tip keeps the circle.
                             _ => {
                                 let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
-                                crate::brush_cursor::cursor(&painter, p, brush, full, cur.painting == PaintingCursor::NormalTip, centre)
+                                let axes = crate::brush_cursor::tip_axes(&xf, brush.size);
+                                crate::brush_cursor::cursor(&painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
                             }
                         }
                     }
