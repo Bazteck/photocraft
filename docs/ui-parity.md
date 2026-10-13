@@ -120,7 +120,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Handle on the last point, close-drag handle | partial | #1482 |
 | Pen Auto Add/Delete: click a segment of the active path to add, an anchor to delete; ⇧ suspends it | done | #4144 |
 | Path operations in the options bar (combine, subtract, intersect, exclude) | partial | `layer.combineShapes.*`; Pen options #1397 |
-| On-canvas corner-radius handles on live shapes | done: live rectangles show a widget at each arc centre with Path Selection and the Rectangle tool; a drag rounds every corner, ⌥ one corner, previewed and committed as one `shape.edit` (`corner_radius.rs`, `corner_radius_tests.rs`) | TOOL-214-12 |
+| On-canvas corner-radius handles on live shapes | done: every selected live rectangle shows a widget at each arc centre with Path Selection, the Rectangle tool and Move with Show Transform Controls; a drag rounds every corner of every selected rectangle to the same radius, ⌥ that corner on each, with the corner radius cursor and an `R:` readout, previewed and committed as one history step (`corner_radius.rs`, `corner_radius_tests.rs`) | TOOL-214-12 |
 | Shape stroke controls (dash, caps, joins, align) | done | TOOL-1053-1, [`shape-strokes.md`](shape-strokes.md) |
 | Rotated shape selection hints correct | partial | #2512 |
 | Curved shape bounds exact | partial | one pixel too wide (#2537) |

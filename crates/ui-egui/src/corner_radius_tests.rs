@@ -106,3 +106,81 @@ fn app_with(shape: serde_json::Value) -> PhotocraftApp {
     app.ui.tool = Tool::PathSelection;
     app
 }
+
+/// Three live rectangles: (20, 20) 60 × 40 radii 5, (110, 20) 70 × 50 radii 0, and (20, 120)
+/// 80 × 60 radii 0, the last one left unselected. Returns the ids, bottom first.
+fn three(tool: Tool) -> (PhotocraftApp, Vec<photocraft_doc::LayerId>) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.sync_views();
+    let mut ids = Vec::new();
+    for (rect, r) in [([20, 20, 60, 40], 5), ([110, 20, 70, 50], 0), ([20, 120, 80, 60], 0)] {
+        app.run("shape.create", json!({"kind": "rect", "rect": rect, "radii": r})).unwrap();
+        ids.push(app.session.active().unwrap().active_layer.unwrap());
+    }
+    app.run("layer.select", json!({"layer": ids[0].0})).unwrap();
+    app.run("layer.select", json!({"layer": ids[1].0, "mode": "add"})).unwrap();
+    app.ui.tool = tool;
+    (app, ids)
+}
+
+fn radii_of(app: &PhotocraftApp, id: photocraft_doc::LayerId) -> [f64; 4] {
+    match &app.session.active().unwrap().doc.layer(id).unwrap().content {
+        LayerContent::Shape(sh) => match sh.live {
+            Some(LiveShape::Rect { radii, .. }) => radii,
+            _ => panic!("live rect"),
+        },
+        _ => panic!("shape"),
+    }
+}
+
+#[test]
+fn one_widget_rounds_every_selected_rectangle_alike_in_one_step() {
+    let (mut app, ids) = three(Tool::PathSelection);
+    let n = steps(&app);
+    // The second rectangle's top-left widget (sharp: 10 px inside, at (120, 30)), dragged 15 px
+    // in each direction: radius 15 on every corner of both selected rectangles.
+    drag(&mut app, [120.0, 30.0], [135.0, 45.0], Modifiers::NONE);
+    assert_eq!(radii_of(&app, ids[0]), [15.0; 4]);
+    assert_eq!(radii_of(&app, ids[1]), [15.0; 4]);
+    assert_eq!(radii_of(&app, ids[2]), [0.0; 4], "the unselected one is untouched");
+    assert_eq!(steps(&app), n + 1, "one history step for both layers");
+    assert!(app.session.undo());
+    assert_eq!((radii_of(&app, ids[0]), radii_of(&app, ids[1])), ([5.0; 4], [0.0; 4]));
+}
+
+#[test]
+fn alt_changes_that_corner_on_each_and_each_stays_within_its_own_size() {
+    let (mut app, ids) = three(Tool::Rectangle);
+    // ⌥ on the first rectangle's top-left widget (radius 5, so drawn 10 px inside at (30, 30)),
+    // dragged far in: each rectangle's top-left corner only, capped at half of its own short side.
+    drag(&mut app, [30.0, 30.0], [100.0, 100.0], Modifiers::ALT);
+    assert_eq!(radii_of(&app, ids[0]), [20.0, 5.0, 5.0, 5.0]);
+    assert_eq!(radii_of(&app, ids[1]), [25.0, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn the_move_tool_shows_and_drags_the_widgets_with_its_transform_controls() {
+    let (mut app, ids) = three(Tool::Move);
+    assert!(!super::pointer(&mut app, ToolEvent::Down { x: 120.0, y: 30.0, pressure: 1.0 }, Modifiers::NONE), "not without the controls");
+    app.ui.tool_options.move_show_transform = true;
+    let before = app.session.active().unwrap().selected_layers();
+    drag(&mut app, [120.0, 30.0], [130.0, 40.0], Modifiers::NONE);
+    assert_eq!((radii_of(&app, ids[0]), radii_of(&app, ids[1])), ([10.0; 4], [10.0; 4]));
+    assert_eq!(app.session.active().unwrap().selected_layers(), before, "the press neither moved nor reselected layers");
+}
+
+#[test]
+fn the_cursor_and_readout_follow_the_widgets() {
+    let mut app = app(Tool::PathSelection);
+    // The corner radius cursor shows over a widget, not elsewhere.
+    assert!(super::hovers(&app, [50.0, 50.0]));
+    assert!(!super::hovers(&app, [100.0, 80.0]));
+    // While dragging it stays, and the readout shows the dragged corner's radius.
+    tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 62.0, y: 62.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(super::hovers(&app, [100.0, 80.0]));
+    assert_eq!(app.ui.corner_radius.as_ref().and_then(super::dragged_radius), Some(22.0));
+    tool_event(&mut app, ToolEvent::Up { x: 62.0, y: 62.0 }, Modifiers::NONE);
+    assert!(!super::hovers(&app, [100.0, 80.0]));
+}
