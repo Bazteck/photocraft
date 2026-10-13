@@ -140,6 +140,15 @@ pub fn move_anchors_curvature(path: &mut Path, anchors: &[[usize; 2]], d: [f64; 
     Ok(())
 }
 
+/// The Curvature Pen's double-click on an anchor: a corner becomes smooth and a smooth knot a
+/// corner (handles retracted), then the subpath reflows as [`move_anchors_curvature`] does, so the
+/// segments around a new smooth point curve through it.
+pub fn toggle_curvature_point(path: &mut Path, knot: [usize; 2]) -> Result<(), String> {
+    let k = knot_mut(path, knot)?;
+    *k = if k.smooth { Knot::corner(k.anchor.x, k.anchor.y) } else { Knot { smooth: true, ..*k } };
+    move_anchors_curvature(path, &[knot], [0.0, 0.0])
+}
+
 /// Puts handle `h` of a knot at `to`. A smooth knot turns its other handle to stay collinear,
 /// unless `independent` (Convert Point / ⌥), which makes it a corner whose handles move apart.
 pub fn move_handle(path: &mut Path, knot: [usize; 2], h: Handle, to: Point, independent: bool) -> Result<(), String> {
@@ -406,6 +415,24 @@ mod tests {
         assert!(move_anchors_curvature(&mut q, &[[0, 9]], [1.0, 1.0]).is_err());
         assert!(move_anchors_curvature(&mut q, &[[4, 0]], [1.0, 1.0]).is_err());
         assert_eq!(q, before, "a refused edit changes nothing");
+    }
+
+    #[test]
+    fn a_curvature_double_click_turns_a_corner_smooth_and_back() {
+        // A closed square of corners, as the Pen draws it.
+        let square = || Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])]);
+        let mut p = square();
+        toggle_curvature_point(&mut p, [0, 1]).unwrap();
+        let k = at(&p, 0, 1);
+        assert!(k.smooth);
+        let want = curvature_knots(&[[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]], &[true, false, true, true], true)[1];
+        assert_eq!([[k.in_ctrl.x, k.in_ctrl.y], [k.out_ctrl.x, k.out_ctrl.y]], [want[1], want[2]], "its handles follow its neighbours");
+        assert_eq!((at(&p, 0, 0), at(&p, 0, 2)), (at(&square(), 0, 0), at(&square(), 0, 2)), "the corners around keep theirs");
+        toggle_curvature_point(&mut p, [0, 1]).unwrap();
+        assert_eq!(p, square(), "a second double-click makes it a corner again");
+        assert!(toggle_curvature_point(&mut p, [0, 7]).is_err());
+        assert!(toggle_curvature_point(&mut p, [3, 0]).is_err());
+        assert_eq!(p, square());
     }
 
     #[test]

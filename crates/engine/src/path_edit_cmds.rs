@@ -109,6 +109,9 @@ fn bend_segment(s: &mut Session, p: &Value) -> Result<Value> {
 fn convert_point(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.convertPoint";
     let k = knot(CMD, p)?;
+    if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
+        return edit_path(s, CMD, p, "Convert Point", |path| edit::toggle_curvature_point(path, k));
+    }
     let out = point(CMD, p, "out")?;
     edit_path(s, CMD, p, "Convert Point", |path| edit::convert_point(path, k, out))
 }
@@ -174,7 +177,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "path.convertPoint",
             "Convert Point",
-            r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror)"#.into(),
+            r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror),"curvature":bool=false (the Curvature Pen's double-click: toggles smooth/corner and reflows the smooth knots of the subpath; out ignored)"#.into(),
             convert_point,
         ),
         spec(
@@ -244,6 +247,19 @@ mod tests {
         }
         assert_eq!(s.active().unwrap().history.undo_label(), Some("Drag Anchor Points"));
         assert!(s.execute("path.moveAnchors", json!({"anchors": [[0, 9]], "move": [1, 0], "curvature": true})).is_err());
+    }
+
+    #[test]
+    fn a_curvature_convert_toggles_the_point_and_reflows() {
+        let mut s = session();
+        s.execute("path.set", json!({"path": square()})).unwrap();
+        let before = work(&s);
+        s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "curvature": true})).unwrap();
+        let k = work(&s).subpaths[0].knots[1];
+        assert!(k.smooth && k.in_ctrl != k.anchor && k.out_ctrl != k.anchor, "{k:?}");
+        s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "curvature": true})).unwrap();
+        assert_eq!(work(&s), before);
+        assert!(s.execute("path.convertPoint", json!({"subpath": 0, "knot": 9, "curvature": true})).is_err());
     }
 
     #[test]

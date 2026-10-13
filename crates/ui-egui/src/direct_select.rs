@@ -67,6 +67,10 @@ pub struct DirectSelection {
     pub segment: Option<[usize; 2]>,
     #[serde(skip)]
     pub drag: Option<Drag>,
+    /// The history step the drag's commit joins (`coalesce`): a Curvature Pen click on a segment
+    /// adds the anchor it then drags, and both are one step.
+    #[serde(skip)]
+    pub coalesce: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -245,6 +249,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
         ToolEvent::Up { x, y } => match app.ui.direct_selection.drag.take() {
             Some(Drag::Edit { target, base, edit, start, .. }) => {
                 release(app, target, &base, &edit, start, [x, y]);
+                app.ui.direct_selection.coalesce = None;
                 true
             }
             Some(Drag::Marquee { start, add, .. }) => {
@@ -340,17 +345,79 @@ fn press(app: &mut PhotocraftApp, p: [f64; 2], mods: Modifiers, convert: bool) -
     true
 }
 
-/// Curvature Pen press with no path being drawn: grab the active path's anchor under the pointer
-/// and drag it; the curve reflows smoothly through it, as in Photoshop (one `path.moveAnchors`
-/// step with `curvature` on release). False when no anchor is hit, so the press starts a new path.
-fn curvature_press(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
+/// What the idle Curvature Pen has under document point `p` on the active paths: an anchor or a
+/// segment, with the path it is on. Handles don't count.
+fn curvature_target(app: &PhotocraftApp, p: [f64; 2]) -> Option<(PathRef, Path, Hit)> {
     let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
-    let found = active_paths(app).into_iter().find_map(|(r, path)| match edit::hit(&path, Point::new(p[0], p[1]), tol, &[]) {
-        Some(Hit::Anchor(k)) => Some((r, path, k)),
+    active_paths(app).into_iter().find_map(|(r, path)| match edit::hit(&path, Point::new(p[0], p[1]), tol, &[]) {
+        Some(h @ (Hit::Anchor(_) | Hit::Segment(..))) => Some((r, path, h)),
         _ => None,
-    });
-    let Some((target, base, k)) = found else { return false };
-    app.ui.direct_selection = DirectSelection { target: Some(target), anchors: vec![k], ..Default::default() };
+    })
+}
+
+/// What a Curvature Pen press at `p` would do to an existing point, for its cursor: the anchor
+/// under it (idle: one of the active path's; drawing: one of the path being drawn), or the active
+/// path's segment it would add an anchor to.
+pub fn curvature_hover(app: &PhotocraftApp, p: [f64; 2], mods: Modifiers) -> Option<Hit> {
+    if app.ui.tool != Tool::CurvaturePen || mods.command {
+        return None;
+    }
+    if !curvature_idle(app, mods) {
+        return crate::vector_ui::curvature_anchor_at(app, p[0], p[1]).map(|i| Hit::Anchor([0, i]));
+    }
+    curvature_target(app, p).map(|(.., h)| h)
+}
+
+/// The idle Curvature Pen's double-click on an anchor of the active path: smooth ↔ corner, and
+/// the subpath reflows (one `path.convertPoint` with `curvature`).
+pub(crate) fn curvature_toggle_active(app: &mut PhotocraftApp, p: [f64; 2]) {
+    let Some((target, _, Hit::Anchor([s, k]))) = curvature_target(app, p) else { return };
+    let mut params = json!({"subpath": s, "knot": k, "curvature": true});
+    if let (Some(o), Some(tp)) = (params.as_object_mut(), target.params().as_object()) {
+        o.extend(tp.clone());
+    }
+    if let Err(e) = app.run("path.convertPoint", params) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+    app.ui.direct_selection = DirectSelection { target: Some(target), anchors: vec![[s, k]], ..Default::default() };
+}
+
+/// Curvature Pen press with no path being drawn, on the active path: an anchor is grabbed and
+/// dragged; a segment gets a new anchor there (`path.addAnchor`), dragged the same way. Either
+/// way the curve reflows smoothly through the moved anchor, as in Photoshop (`path.moveAnchors`
+/// with `curvature` on release), and an added anchor and its drag are one history step. False
+/// when the press hits neither, so it starts a new path.
+fn curvature_press(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
+    let Some((target, mut base, hit)) = curvature_target(app, p) else { return false };
+    let mut coalesce = None;
+    let k = match hit {
+        Hit::Anchor(k) => k,
+        Hit::Segment([s, k], t) => {
+            let key = format!("curvature-add-{}", app.ui.alloc_id());
+            let mut params = json!({"subpath": s, "knot": k, "t": t.clamp(0.01, 0.99), "coalesce": key});
+            if let (Some(o), Some(tp)) = (params.as_object_mut(), target.params().as_object()) {
+                o.extend(tp.clone());
+            }
+            let added = match app.run("path.addAnchor", params) {
+                Ok(v) => v,
+                Err(e) => {
+                    app.ui.status = e;
+                    app.ui.status_error = true;
+                    return true;
+                }
+            };
+            let n = |f: &str| added["anchor"][f].as_u64().and_then(|v| usize::try_from(v).ok());
+            let (Some(s), Some(k), Some(path)) = (n("subpath"), n("knot"), active_paths(app).into_iter().find(|(r, _)| *r == target).map(|(_, p)| p)) else {
+                return true;
+            };
+            base = path;
+            coalesce = Some(key);
+            [s, k]
+        }
+        Hit::Handle(..) => return false,
+    };
+    app.ui.direct_selection = DirectSelection { target: Some(target), anchors: vec![k], coalesce, ..Default::default() };
     app.ui.direct_selection.drag = Some(Drag::Edit { target, base, edit: Edit::Curvature(vec![k]), start: p, end: p, preview: None });
     true
 }
@@ -380,6 +447,9 @@ fn release(app: &mut PhotocraftApp, target: PathRef, base: &Path, edit: &Edit, s
     };
     if let (Some(p), Some(t)) = (params.as_object_mut(), target.params().as_object()) {
         p.extend(t.clone());
+    }
+    if let (Some(p), Some(key)) = (params.as_object_mut(), app.ui.direct_selection.coalesce.take()) {
+        p.insert("coalesce".into(), json!(key));
     }
     if let Err(e) = app.run(id, params) {
         app.ui.status = e;

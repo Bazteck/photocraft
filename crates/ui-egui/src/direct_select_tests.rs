@@ -348,8 +348,8 @@ fn the_curvature_pen_off_an_anchor_still_draws_and_edits_its_own_path() {
     let mut app = app(Tool::CurvaturePen);
     with_path(&mut app);
     let before = work(&app);
-    // A press on a segment or empty canvas starts a new path, as before.
-    click(&mut app, [80.0, 120.0], Modifiers::NONE);
+    // A press on empty canvas starts a new path, as before (a segment would get an anchor).
+    click(&mut app, [80.0, 170.0], Modifiers::NONE);
     click(&mut app, [170.0, 170.0], Modifiers::NONE);
     assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(2));
     assert!(!super::shows(&app, Modifiers::NONE), "while drawing, the Curvature Pen shows its own path");
@@ -381,4 +381,117 @@ fn a_closed_curvature_pen_path_stays_editable_with_the_curvature_pen() {
     for (k, w) in work(&app).subpaths[0].knots.iter().zip(want) {
         assert_eq!([[k.anchor.x, k.anchor.y], [k.in_ctrl.x, k.in_ctrl.y], [k.out_ctrl.x, k.out_ctrl.y]], w);
     }
+}
+
+/// A Pen-drawn work path: a closed square of corners (40, 40)–(160, 160).
+fn with_corner_square(app: &mut PhotocraftApp) {
+    let path = json!({"subpaths": [{"closed": true, "knots": [[40, 40], [160, 40], [160, 160], [40, 160]]}]});
+    app.run("path.set", json!({"name": "work", "path": path})).unwrap();
+}
+
+#[test]
+fn the_curvature_pen_adds_an_anchor_on_a_segment_and_drags_it_in_one_step() {
+    let mut app = app(Tool::CurvaturePen);
+    with_corner_square(&mut app);
+    let n = steps(&app);
+    // A press on the top edge adds an anchor there; the drag pulls it up.
+    drag(&mut app, [100.0, 40.0], [100.0, 10.0], Modifiers::NONE);
+    let sp = &work(&app).subpaths[0];
+    assert_eq!(sp.knots.len(), 5, "one anchor added");
+    assert_eq!(sp.knots[1].anchor, Point::new(100.0, 10.0));
+    assert!(app.ui.pen.is_none(), "no new path was started");
+    assert_eq!(steps(&app), n + 1, "adding and dragging the anchor is one history step");
+    assert!(app.session.undo());
+    assert_eq!(work(&app).subpaths[0].knots.len(), 4);
+    // A click on a segment just adds the anchor.
+    click(&mut app, [160.0, 100.0], Modifiers::NONE);
+    assert_eq!(work(&app).subpaths[0].knots.len(), 5);
+}
+
+#[test]
+fn a_curvature_pen_double_click_rounds_a_pen_corner_and_back() {
+    let mut app = app(Tool::CurvaturePen);
+    with_corner_square(&mut app);
+    let before = work(&app);
+    crate::vector_ui::curvature_toggle(&mut app, 160.0, 40.0);
+    let k = work(&app).subpaths[0].knots[1];
+    assert!(k.smooth && k.in_ctrl != k.anchor && k.out_ctrl != k.anchor, "the corner turned smooth: {k:?}");
+    crate::vector_ui::curvature_toggle(&mut app, 160.0, 40.0);
+    assert_eq!(work(&app), before);
+    // Off the path it does nothing (and starts nothing).
+    crate::vector_ui::curvature_toggle(&mut app, 100.0, 100.0);
+    assert_eq!((work(&app), app.ui.pen.is_none()), (before, true));
+}
+
+#[test]
+fn the_curvature_pen_cursor_shows_what_a_press_does() {
+    use crate::tool_feedback::{Badge, badge};
+    let mut app = app(Tool::CurvaturePen);
+    with_corner_square(&mut app);
+    for (at, want) in [([100.0, 40.0], Some(Badge::Add)), ([160.0, 40.0], Some(Badge::Move)), ([100.0, 100.0], None)] {
+        app.hover_doc = Some(at);
+        assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::NONE), want, "at {at:?}");
+    }
+    // ⌘/Ctrl is Direct Selection: no Curvature Pen badge.
+    app.hover_doc = Some([160.0, 40.0]);
+    assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::COMMAND), None);
+    // While drawing, its own anchors take the move badge and the active path's segments none.
+    click(&mut app, [20.0, 180.0], Modifiers::NONE);
+    click(&mut app, [60.0, 190.0], Modifiers::NONE);
+    app.hover_doc = Some([60.0, 190.0]);
+    assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::NONE), Some(Badge::Move));
+    app.hover_doc = Some([100.0, 40.0]);
+    assert_eq!(badge(&app, Tool::CurvaturePen, Modifiers::NONE), None);
+}
+
+/// The real canvas: a Curvature Pen double-click on a Pen corner of the active path rounds it.
+#[test]
+fn a_curvature_pen_double_click_through_the_canvas_rounds_a_corner() {
+    use egui::{PointerButton, vec2};
+    use egui_kittest::Harness;
+    let mut app = app(Tool::CurvaturePen);
+    with_corner_square(&mut app);
+    app.ui.extras.rulers = false;
+    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    let v = &mut h.state_mut().ui.views[0];
+    v.zoom = 1.0;
+    v.center = [100.0, 100.0];
+    v.fit_pending = false;
+    h.run_steps(2);
+    let p = {
+        let app = h.state();
+        let v = &app.ui.views[0];
+        let xf = crate::canvas::ViewXform {
+            rect: crate::rulers::content_rect(app, app.last_canvas_rect),
+            zoom: v.zoom,
+            center: v.center,
+            flip: false,
+            rotation: v.rotation,
+            aspect: app.ui.view.display_aspect(),
+        };
+        xf.to_screen(160.0, 40.0)
+    };
+    for _ in 0..2 {
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+        for down in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+        }
+    }
+    h.run_steps(1);
+    let k = work(h.state()).subpaths[0].knots[1];
+    assert!(k.smooth && k.in_ctrl != k.anchor, "the double-clicked corner is smooth: {k:?}");
+    assert!(h.state().ui.pen.is_none(), "and no path was started");
 }
