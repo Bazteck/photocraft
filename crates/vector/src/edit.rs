@@ -116,6 +116,30 @@ pub fn move_anchors(path: &mut Path, anchors: &[[usize; 2]], d: [f64; 2]) -> Res
     Ok(())
 }
 
+/// The Curvature Pen's anchor drag: moves the anchors like [`move_anchors`], then recomputes the
+/// handles of every smooth knot in the subpaths it touched with [`curvature_knots`], so the curve
+/// keeps flowing smoothly through all its anchors, as Photoshop does. Corner knots keep their own
+/// handles (moved with them).
+pub fn move_anchors_curvature(path: &mut Path, anchors: &[[usize; 2]], d: [f64; 2]) -> Result<(), String> {
+    move_anchors(path, anchors, d)?;
+    let mut subs: Vec<usize> = anchors.iter().map(|a| a[0]).collect();
+    subs.sort_unstable();
+    subs.dedup();
+    for s in subs {
+        let sp = path.subpaths.get_mut(s).ok_or_else(|| format!("no subpath {s}"))?;
+        let pts: Vec<[f64; 2]> = sp.knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
+        let corners: Vec<bool> = sp.knots.iter().map(|k| !k.smooth).collect();
+        let fresh = curvature_knots(&pts, &corners, sp.closed);
+        for (k, f) in sp.knots.iter_mut().zip(fresh) {
+            if k.smooth {
+                k.in_ctrl = Point::new(f[1][0], f[1][1]);
+                k.out_ctrl = Point::new(f[2][0], f[2][1]);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Puts handle `h` of a knot at `to`. A smooth knot turns its other handle to stay collinear,
 /// unless `independent` (Convert Point / ⌥), which makes it a corner whose handles move apart.
 pub fn move_handle(path: &mut Path, knot: [usize; 2], h: Handle, to: Point, independent: bool) -> Result<(), String> {
@@ -346,6 +370,42 @@ mod tests {
 
     fn at(path: &Path, s: usize, k: usize) -> Knot {
         path.subpaths[s].knots[k]
+    }
+
+    /// A closed four-anchor curvature loop (all smooth), as the Curvature Pen draws it.
+    fn loop4() -> Path {
+        let pts = [[0.0, 50.0], [100.0, 0.0], [200.0, 50.0], [100.0, 100.0]];
+        let knots = curvature_knots(&pts, &[false; 4], true)
+            .into_iter()
+            .map(|k| Knot::smooth(Point::new(k[0][0], k[0][1]), Point::new(k[1][0], k[1][1]), Point::new(k[2][0], k[2][1])))
+            .collect();
+        Path::new(vec![Subpath { closed: true, knots, op: Default::default() }])
+    }
+
+    #[test]
+    fn a_curvature_drag_reflows_every_smooth_knot_through_the_moved_anchor() {
+        let mut p = loop4();
+        move_anchors_curvature(&mut p, &[[0, 1]], [0.0, 60.0]).unwrap();
+        let pts = [[0.0, 50.0], [100.0, 60.0], [200.0, 50.0], [100.0, 100.0]];
+        let want = curvature_knots(&pts, &[false; 4], true);
+        for (k, w) in p.subpaths[0].knots.iter().zip(want) {
+            assert_eq!([[k.anchor.x, k.anchor.y], [k.in_ctrl.x, k.in_ctrl.y], [k.out_ctrl.x, k.out_ctrl.y]], w);
+        }
+        // The neighbours turned: not a plain move.
+        assert_ne!(at(&p, 0, 0).out_ctrl, at(&loop4(), 0, 0).out_ctrl);
+    }
+
+    #[test]
+    fn a_curvature_drag_keeps_corner_handles_and_rejects_bad_indices() {
+        let mut p = curve();
+        move_anchors_curvature(&mut p, &[[0, 1]], [0.0, 10.0]).unwrap();
+        assert_eq!((at(&p, 0, 0), at(&p, 0, 2)), (at(&curve(), 0, 0), at(&curve(), 0, 2)), "the corners kept their handles");
+        assert_eq!(at(&p, 0, 1).anchor, Point::new(50.0, 10.0));
+        let before = curve();
+        let mut q = curve();
+        assert!(move_anchors_curvature(&mut q, &[[0, 9]], [1.0, 1.0]).is_err());
+        assert!(move_anchors_curvature(&mut q, &[[4, 0]], [1.0, 1.0]).is_err());
+        assert_eq!(q, before, "a refused edit changes nothing");
     }
 
     #[test]

@@ -325,3 +325,60 @@ fn arrow_keys_nudge_the_selected_anchors() {
     assert!(app.session.undo() && app.session.undo());
     assert_eq!(work(&app), before);
 }
+
+#[test]
+fn the_curvature_pen_drags_an_anchor_of_the_active_path_without_a_modifier() {
+    // As in Photoshop: with no path being drawn, pressing an anchor and dragging moves it.
+    let mut app = app(Tool::CurvaturePen);
+    with_path(&mut app);
+    assert!(super::shows(&app, Modifiers::NONE), "the Curvature Pen shows the active path's anchors");
+    let (before, n) = (work(&app), steps(&app));
+    drag(&mut app, [40.5, 120.5], [50.5, 130.5], Modifiers::NONE);
+    assert_eq!(anchor(&app, 3), Point::new(50.0, 130.0));
+    assert_eq!(anchor(&app, 0), Point::new(40.0, 40.0), "only the dragged anchor moved");
+    assert_eq!(work(&app).subpaths.len(), 1, "no new path was started");
+    assert!(app.ui.pen.is_none(), "nor is one being drawn");
+    assert_eq!(steps(&app), n + 1, "one history step for the whole drag");
+    assert!(app.session.undo());
+    assert_eq!(work(&app), before);
+}
+
+#[test]
+fn the_curvature_pen_off_an_anchor_still_draws_and_edits_its_own_path() {
+    let mut app = app(Tool::CurvaturePen);
+    with_path(&mut app);
+    let before = work(&app);
+    // A press on a segment or empty canvas starts a new path, as before.
+    click(&mut app, [80.0, 120.0], Modifiers::NONE);
+    click(&mut app, [170.0, 170.0], Modifiers::NONE);
+    assert_eq!(app.ui.pen.as_ref().map(|p| p.knots.len()), Some(2));
+    assert!(!super::shows(&app, Modifiers::NONE), "while drawing, the Curvature Pen shows its own path");
+    // While drawing, a press on an anchor of the path being drawn moves that one, not the work path's.
+    drag(&mut app, [170.0, 170.0], [180.0, 160.0], Modifiers::NONE);
+    assert_eq!(app.ui.pen.as_ref().and_then(|p| p.knots.get(1)).map(|k| k[0]), Some([180.0, 160.0]));
+    assert_eq!(work(&app), before);
+}
+
+#[test]
+fn a_closed_curvature_pen_path_stays_editable_with_the_curvature_pen() {
+    let mut app = app(Tool::CurvaturePen);
+    app.ui.tool_options.vector_mode = "path".into();
+    for p in [[40.0, 40.0], [160.0, 40.0], [100.0, 160.0], [40.0, 40.0]] {
+        click(&mut app, p, Modifiers::NONE);
+    }
+    assert!(app.ui.pen.is_none(), "clicking the first anchor closed the path");
+    assert!(work(&app).subpaths[0].closed);
+    let n = steps(&app);
+    tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 160.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 100.0, y: 180.0, pressure: 1.0 }, Modifiers::NONE);
+    let Some(Drag::Edit { preview: Some(shown), .. }) = app.ui.direct_selection.drag.clone() else { panic!("an anchor drag with a preview") };
+    tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 180.0 }, Modifiers::NONE);
+    assert_eq!(work(&app), shown, "the preview is what the drag commits");
+    assert_eq!((work(&app).subpaths.len(), steps(&app)), (1, n + 1));
+    // The whole loop reflows through the moved anchor, as the Curvature Pen drew it.
+    let pts = [[40.0, 40.0], [160.0, 40.0], [100.0, 180.0]];
+    let want = photocraft_vector::edit::curvature_knots(&pts, &[false; 3], true);
+    for (k, w) in work(&app).subpaths[0].knots.iter().zip(want) {
+        assert_eq!([[k.anchor.x, k.anchor.y], [k.in_ctrl.x, k.in_ctrl.y], [k.out_ctrl.x, k.out_ctrl.y]], w);
+    }
+}
