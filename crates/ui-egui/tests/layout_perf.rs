@@ -132,6 +132,8 @@ fn auto_select_moves_the_layer_under_the_pointer() {
     actual_pixels(&mut h);
     h.state_mut().ui.tool = Tool::Move;
     h.state_mut().ui.tool_options.move_auto_select = true;
+    // These layers sit inside groups; the Layer target picks the layer itself, not its group.
+    h.state_mut().ui.tool_options.move_target = "layer".into();
     h.state_mut().run("layer.select", json!({"layer": k.pixel.0})).expect("select");
     h.run_steps(2);
     let (pixel_before, text_before) = (bounds(&h, k.pixel), bounds(&h, k.text));
@@ -150,6 +152,8 @@ fn a_move_tool_click_selects_without_moving() {
     let (mut h, k) = app();
     h.state_mut().ui.tool = Tool::Move;
     h.state_mut().ui.tool_options.move_auto_select = true;
+    // These layers sit inside groups; the Layer target picks the layer itself, not its group.
+    h.state_mut().ui.tool_options.move_target = "layer".into();
     for id in [k.text, k.shape, k.pixel, k.text] {
         let before = (bounds(&h, id), h.state().session.active().expect("doc").history.entries().len());
         let p = screen(&h, point_on(&h, id));
