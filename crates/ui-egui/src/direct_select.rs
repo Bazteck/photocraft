@@ -142,13 +142,19 @@ pub fn shows(app: &PhotocraftApp, mods: Modifiers) -> bool {
         || matches!(app.ui.tool, Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint)
 }
 
-/// The paths Direct Selection edits, front first: the Pen path being drawn, the targeted vector
-/// mask or the active shape layer's path, then the work path.
-pub(crate) fn candidates(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
-    let pen = app.ui.pen.as_ref().filter(|p| !p.dragging && !p.knots.is_empty()).map(|p| (PathRef::Pen, crate::vector_ui::pen_path(p)));
+/// The active paths, front first: the targeted vector mask or the active shape layer's path, then
+/// the work path. The Pen's Auto Add/Delete edits these (`anchor_tools::pen_auto`).
+pub(crate) fn active_paths(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
     let layer = crate::vector_ui::targeted_vector_mask(app).or_else(|| crate::vector_ui::active_shape_path(app));
     let work = app.session.active().and_then(|st| st.doc.work_path.clone());
-    let mut out: Vec<_> = pen.into_iter().chain(layer.map(|(id, p)| (PathRef::Layer(id), p))).chain(work.map(|p| (PathRef::Work, p))).collect();
+    layer.map(|(id, p)| (PathRef::Layer(id), p)).into_iter().chain(work.map(|p| (PathRef::Work, p))).collect()
+}
+
+/// The paths Direct Selection edits, front first: the Pen path being drawn, the active paths, then
+/// every visible shape layer.
+pub(crate) fn candidates(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
+    let pen = app.ui.pen.as_ref().filter(|p| !p.dragging && !p.knots.is_empty()).map(|p| (PathRef::Pen, crate::vector_ui::pen_path(p)));
+    let mut out: Vec<_> = pen.into_iter().chain(active_paths(app)).collect();
     if let Some(st) = app.session.active() {
         for (path, _, l) in st.doc.walk().iter().rev() {
             if !l.visible || !(1..=path.len()).all(|n| st.doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) {
