@@ -110,7 +110,8 @@ pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badg
     // The Curvature Pen over a point: + on the active path's segments (a click adds an anchor
     // there), four arrows on an anchor (a press drags it).
     if let Some(p) = app.hover_doc.filter(|_| tool == Tool::CurvaturePen) {
-        return crate::direct_select::curvature_hover(app, p, m).map(|h| if matches!(h, photocraft_vector::edit::Hit::Segment(..)) { Badge::Add } else { Badge::Move });
+        return crate::direct_select::curvature_hover(app, p, m)
+            .map(|h| if matches!(h, photocraft_vector::edit::Hit::Segment(..)) { Badge::Add } else { Badge::Move });
     }
     // The Pen over the active path with Auto Add/Delete on: what a click would do (#4144).
     if let Some(p) = app.hover_doc.filter(|_| tool == Tool::Pen) {
